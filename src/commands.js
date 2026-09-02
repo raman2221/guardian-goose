@@ -30,10 +30,31 @@ const send = (sock, phone, text) => sock.sendMessage(addrFor(DB, phone), { text 
 // Timestamps shown to admins are in Detroit time (explicit — independent of server TZ).
 const fmtTs = (ts) => new Date(ts * 1000).toLocaleString('sv-SE', { timeZone: 'America/Detroit' }).slice(0, 16) + ' ET';
 
+// Admin wizards (/associate, /remove, /policy, ...) expire after this long without a reply, so a
+// half-finished command from earlier never silently swallows the next thing an admin types.
+// Joiner onboarding sessions never expire (a new member may DM their uniqname days later).
+export const SESSION_TTL_S = 60 * 60;
+
 const getSession = (db, phone) => {
-  const r = db.prepare('SELECT state FROM dm_session WHERE phone=?').get(phone);
-  try { return r ? JSON.parse(r.state) : null; } catch { return null; }
+  const r = db.prepare('SELECT state, ts FROM dm_session WHERE phone=?').get(phone);
+  try { return r ? { ...JSON.parse(r.state), _ts: r.ts } : null; } catch { return null; }
 };
+// Drop a stale or superseded admin wizard. Returns a short note for the admin, or null if the
+// session is still live (or is a joiner onboarding session).
+function expireSession(db, phone, sess, body) {
+  if (!sess || sess.cmd === 'onboard') return null;
+  const age = now() - (sess._ts || 0);
+  const label = '/' + sess.cmd;
+  if (age > SESSION_TTL_S) {
+    clearSession(db, phone);
+    return `(Dropped your unfinished ${label} from ${fmtTs(sess._ts)} — it expired after an hour.)`;
+  }
+  if (body.startsWith('/')) {
+    clearSession(db, phone);
+    return `(Dropped your unfinished ${label}.)`;
+  }
+  return null;
+}
 const setSession = (db, phone, state) =>
   db.prepare(`INSERT INTO dm_session (phone,state,ts) VALUES (?,?,?)
               ON CONFLICT(phone) DO UPDATE SET state=excluded.state, ts=excluded.ts`)
@@ -110,9 +131,12 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
   SUPERS = new Set(cfg.superadmins || []); // refresh operator set each DM
   DB = db;
   const body = clean(rawText);
-  const sess = getSession(db, senderPhone);
+  let sess = getSession(db, senderPhone);
+  const dropped = expireSession(db, senderPhone, sess, body);
+  if (dropped) { sess = null; if (!body.startsWith('/')) return (await send(sock, senderPhone, `${dropped} Send a command to start over, or /help.`), true); }
   if (sess) return stepSession(sock, db, cfg, senderPhone, body, sess, rawText);
   if (!body.startsWith('/')) return false;
+  if (dropped && body.toLowerCase() !== '/help') await send(sock, senderPhone, dropped);
 
   const tk = tokens(body);
   const cmd = tk[0].toLowerCase();
