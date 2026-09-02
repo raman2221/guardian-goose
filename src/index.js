@@ -436,7 +436,7 @@ async function start() {
       }
       await syncGroup(sock, gid);
     } else if (action === 'remove') {
-      for (const part of participants) { db.prepare('DELETE FROM membership WHERE gid=? AND phone=?').run(gid, partLid(part)); bumpStat(db, gid, 'leaves'); }
+      for (const part of participants) { db.prepare('DELETE FROM membership WHERE gid=? AND phone=?').run(gid, partLid(part)); db.prepare('DELETE FROM first_post WHERE gid=? AND phone=?').run(gid, partLid(part)); bumpStat(db, gid, 'leaves'); }
       await syncGroup(sock, gid);
     }
   });

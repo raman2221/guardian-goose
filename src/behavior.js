@@ -31,13 +31,14 @@ const DM_RE = /\b(dm me|message me|inbox me|text me|hit me up|whatsapp me|contac
 // "non-profit" and the like never match. Merged with cfg.behavior.scamKeywords (plain strings,
 // matched as whole-word prefixes).
 const DEFAULT_SCAM = [
-  /\bgofund/, /\binvest(?!igat)/, /\bcrypto/, /\bforex\b/, /guaranteed (return|profit)/, /double your/,
-  /binary option/, /cash ?app flip/, /\bpre[- ]?ipo\b/, /passive income/, /\bget rich/, /\bhalal (stock|invest|wealth)/,
+  /\bgofund/, /\bcryptocurrenc/, /\bcrypto[- ]?(trad|invest|wallet|profit|signal|market|coin|mining)/, /\bforex\b/,
+  /guaranteed (return|profit)/, /double your/, /binary option/, /cash ?app flip/, /\bpre[- ]?ipo\b/, /passive income/,
+  /\bget rich/, /\bhalal (stock|invest|wealth)/, /\bstock (selection|tips?|picks?|signals?)\b/,
 ];
 // Solicitation vocabulary (finance, trading, charity appeals). Weak alone — clubs do talk
 // about stocks and fundraisers — but STRONG when the same message carries a link.
 const DEFAULT_SOLICIT = [
-  /\bstocks?\b/, /\btrad(ing|ers?)\b/, /(?<!non-?)\bprofits?\b/, /\bearn(ings?)?\b/, /\bincome\b/, /\bwealth\b/,
+  /\binvest(?!igat)/, /\bstocks?\b/, /\btrad(ing|ers?)\b/, /(?<!non-?)\bprofits?\b/, /\bearn(ings?)?\b/, /\bincome\b/, /\bwealth\b/,
   /\binvestors?\b/, /\bbitcoin\b/, /\bbtc\b/, /\busdt\b/, /\bloans?\b/, /\bdonat(e|ions?)\b/, /\bfundrais/,
   /\bcharity\b/, /\borphan/, /\bsponsor me\b/, /\bsignals\b/, /\bshari(a|ah)\b/, /\bmarket (insight|update|tip)/,
 ];
@@ -54,11 +55,17 @@ const hasAny = (low, list) => list.some((re) => re.test(low));
 export const STRONG = ['first_msg_spam', 'cross_group', 'scam_keyword', 'invite_link', 'solicit_link'];
 export const isStrong = (signals) => signals.some((s) => STRONG.includes(s));
 // Hard-strong = confident enough to delete even from a grandfathered (pre-trusted, never
-// verified) member: hard scam vocabulary or a cross-group broadcast. Invite links and
-// link+solicitation are common legit posts from existing members (subgroup invites,
-// fundraisers), so those only delete when the sender is untrusted.
-export const HARD_STRONG = ['scam_keyword', 'cross_group'];
-export const isHardStrong = (signals) => signals.some((s) => HARD_STRONG.includes(s));
+// verified) member. Every real spam post seen so far carried a link, so vocabulary alone
+// is never enough here ("crypto" means cryptography in a CS group; clubs "invest time"):
+//   cross-group broadcast, OR scam vocabulary WITH a link, OR an invite link WITH
+//   solicitation vocabulary. A bare subgroup invite or fundraiser link from an existing
+//   member stays flag-only.
+export const isHardStrong = (signals) => {
+  const has = (x) => signals.includes(x);
+  return has('cross_group')
+    || (has('scam_keyword') && (has('link') || has('invite_link')))
+    || (has('invite_link') && has('solicit_kw'));
+};
 
 // opts: { hasMedia:bool, isFirstMessage:bool }
 // Returns triggered signals: burst | cross_group | scam_keyword | solicit_kw | link |
