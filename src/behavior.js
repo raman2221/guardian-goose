@@ -27,11 +27,29 @@ const URL_RE = /(https?:\/\/|www\.|wa\.me\/|chat\.whatsapp\.com\/|t\.me\/|bit\.l
 const INVITE_RE = /(chat\.whatsapp\.com\/|t\.me\/(joinchat\/|\+)|t\.me\/[\w]+|discord\.gg\/)/i;
 const DM_RE = /\b(dm me|message me|inbox me|text me|hit me up|whatsapp me|contact me|reach out|reach me|hmu|slide in|check my bio|link in bio)\b/i;
 
-// Hard scam vocabulary: any hit is STRONG by itself. Word-anchored so "investigate",
-// "non-profit" and the like never match. Merged with cfg.behavior.scamKeywords (plain strings,
+// Hard scam vocabulary: any hit is STRONG by itself, link or not. Bare "stock" / "invest" are
+// NOT here (see DEFAULT_SOLICIT); what is here is the recruitment-pitch phrasing every scam so
+// far shared: "stock information and discussion platform", "investors are welcome to join",
+// "learn from each other", "daily market updates", "stock selection recommendations".
+// Word-anchored so "investigate" never matches. Merged with cfg.behavior.scamKeywords (plain strings,
 // matched as whole-word prefixes).
 const DEFAULT_SCAM = [
   /\bgofund/, /\bcryptocurrenc/, /\bcrypto[- ]?(trad|invest|wallet|profit|signal|market|coin|mining)/, /\bforex\b/,
+  // recruitment-pitch phrasing (finance "information group" scams)
+  /\b(stock|invest\w*|trading|financ\w*|crypto\w*|forex|market) (information|discussion|study|learning|sharing|exchange|research)( and \w+)? (group|platform|community|club|channel)/,
+  /\b(information|discussion|knowledge)[- ]sharing (group|platform|community)/,
+  /\b(stock|invest\w*|trading|financ\w*|crypto\w*) (community|group|platform|club|channel)\b/,
+  /\b(enthusiasts?|investors?|traders?|beginners?)( and \w+( \w+)?)? (are|is) welcome/,
+  /\blearn from each other\b/, /\b(grow|progress|profit) together\b/,
+  /\b(daily|weekly|real[- ]time) market (updates?|analysis|insights?|news)\b/, /\bmarket insights?\b/,
+  /\bstock (selection|recommendations?|picks?|tips?|signals?)\b/,
+  /\b(share|exchange|discuss) (\w+ ){0,3}(investment|trading|stock|market) (knowledge|experience|philosoph|insight|strateg|skill)/,
+  // donation-appeal scam phrasing (orphan / sick mother / roof repair chain letters)
+  /\bplease do not ignore this message/, /\b(no matter how small|little or much|however small|small or large|big or small)\b/,
+  /\bmay (god|allah) (reward|bless) (everyone|all|those|anyone|whoever|who)/, /\b(i am|i'm|i’m) (an orphan|a widow|wounded|a refugee)\b/,
+  /\b(even|just) (\$|£|€)\s?\d+ (could|can|would|will|may) (help|make|feed|protect|save|bring)/,
+  /\b(donat\w+|contribut\w+|send (money|support)) (link|via|through|by) (paypal|cash ?app|venmo|zelle|gofund|bank|western union|moneygram)/,
+  /\b(bedridden|dying) (mother|father|child|son|daughter|sister|brother)\b/, /\bthe story of \w+, the orphan/,
   /guaranteed (return|profit)/, /double your/, /binary option/, /cash ?app flip/, /\bpre[- ]?ipo\b/, /passive income/,
   /\bget rich/, /\bhalal (stock|invest|wealth)/, /\bstock (selection|tips?|picks?|signals?)\b/,
 ];
@@ -40,7 +58,7 @@ const DEFAULT_SCAM = [
 const DEFAULT_SOLICIT = [
   /\binvest(?!igat)/, /\bstocks?\b/, /\btrad(ing|ers?)\b/, /(?<!non-?)\bprofits?\b/, /\bearn(ings?)?\b/, /\bincome\b/, /\bwealth\b/,
   /\binvestors?\b/, /\bbitcoin\b/, /\bbtc\b/, /\busdt\b/, /\bloans?\b/, /\bdonat(e|ions?)\b/, /\bfundrais/,
-  /\bcharity\b/, /\borphan/, /\bsponsor me\b/, /\bsignals\b/, /\bshari(a|ah)\b/, /\bmarket (insight|update|tip)/,
+  /\bcharity\b/, /\borphan/, /\bwidow/, /\bbedridden/, /\burgent(ly)? need/, /\bgod bless/, /\bsponsor me\b/, /\bsignals\b/, /\bshari(a|ah)\b/, /\bmarket (insight|update|tip)/,
 ];
 
 const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -55,16 +73,13 @@ const hasAny = (low, list) => list.some((re) => re.test(low));
 export const STRONG = ['first_msg_spam', 'cross_group', 'scam_keyword', 'invite_link', 'solicit_link'];
 export const isStrong = (signals) => signals.some((s) => STRONG.includes(s));
 // Hard-strong = confident enough to delete even from a grandfathered (pre-trusted, never
-// verified) member. Every real spam post seen so far carried a link, so vocabulary alone
-// is never enough here ("crypto" means cryptography in a CS group; clubs "invest time"):
-//   cross-group broadcast, OR scam vocabulary WITH a link, OR an invite link WITH
-//   solicitation vocabulary. A bare subgroup invite or fundraiser link from an existing
-//   member stays flag-only.
+// verified) member: cross-group broadcast, any scam-vocabulary hit (the phrase patterns are
+// precise enough to stand alone), or an invite link paired with solicitation vocabulary. A bare
+// subgroup invite, or a fundraiser link on a non-scam domain, from an existing member stays
+// flag-only.
 export const isHardStrong = (signals) => {
   const has = (x) => signals.includes(x);
-  return has('cross_group')
-    || (has('scam_keyword') && (has('link') || has('invite_link')))
-    || (has('invite_link') && has('solicit_kw'));
+  return has('cross_group') || has('scam_keyword') || (has('invite_link') && has('solicit_kw'));
 };
 
 // opts: { hasMedia:bool, isFirstMessage:bool }

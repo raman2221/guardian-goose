@@ -29,8 +29,12 @@ admins full control from a direct-message console — one keeper watching every 
   group-invite links, links paired with finance/charity solicitation, cross-group broadcasts, and
   drive-by first messages (invite link, "DM me", or link + solicitation). A bare link, media, a
   long post, or a burst only flags admins — a new member's gif or event photo is never deleted.
-  Grandfathered members (in the group before the bot, never verified) lose a message only when
-  scam vocabulary or an invite link travels with a link; verified members are only ever flagged.
+  Scam vocabulary means the finance "information group" recruitment pitch ("stock discussion
+  platform", "investors are welcome to join", "learn from each other"), gofund appeals, forex, and
+  crypto-trading talk; a bare "stock" or "invest" only counts when it travels with a link.
+  Grandfathered members (in the group before the bot, never verified) lose a message on scam
+  vocabulary, a cross-group broadcast, or an invite link with solicitation words; verified members
+  are only ever flagged.
 - **Number screening** — classifies VOIP and foreign numbers (foreign is a signal, never an auto-kick).
 - **Admin console over DM** — set policy, manage the approved-uniqname list, ban/unban, fetch a
   banned user's archived messages, look up members, and pull action logs.

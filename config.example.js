@@ -38,8 +38,9 @@ export default {
     crossGroupWindowMin: 10,       // same text to N groups within window = broadcast spam
     crossGroupThreshold: 3,
     wallOfTextLen: 500,            // message longer than this = 'wall_of_text' signal
-    // Extra HARD scam words (any hit = delete). Built-in defaults already cover gofund, invest,
-    // crypto, forex, pre-IPO, guaranteed return, double your, binary option, cash app flip, ...
+    // Extra HARD scam words (any hit = delete). Built-in defaults already cover the finance
+    // "information group" pitch phrases, gofund, crypto trading, forex, pre-IPO, guaranteed return,
+    // double your, binary option, cash app flip. Bare stock/invest are solicitation words instead.
     // Matched as whole-word prefixes ("invest" hits "investors", not "investigate").
     scamKeywords: [],
     // Extra SOLICITATION words (finance / trading / charity appeals). Weak alone; DELETE when
