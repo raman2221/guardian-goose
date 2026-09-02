@@ -15,6 +15,7 @@
 // =============================================================================
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
+import qrImage from 'qrcode';
 import pino from 'pino';
 import cfg from '../config.js';
 import { openDb } from './db.js';
@@ -27,10 +28,11 @@ import { installOutbox } from './outbox.js';
 import { bumpStat, snapshotMembers } from './stats.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
+const QR_REFRESH_MS = 5 * 60 * 1000; // resend current QR every 5 min while logged out
 // Start of "today" in the process timezone (systemd sets TZ=America/Detroit) — DST-correct.
 const startOfTodayLocal = () => { const d = new Date(); return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000); };
 import { notifyAdmins } from './notify.js';
-import { sendAlert } from './alert.js';
+import { sendAlert, sendEmail } from './alert.js';
 import { clean } from './security.js';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 
@@ -273,9 +275,13 @@ let reconnectAttempts = 0;
 let sweepTimer = null;
 let joinTimer = null;
 let watchdogTimer = null;
+let qrEmailTimer = null;
 let downAlerted = false;
 let connected = false;  // live connection state — watchdog must never alert while true
 let currentSock = null; // always the live socket; timers use this, never a stale closure
+let latestQr = '';
+let lastQrEmailAt = 0;
+let qrEmailBusy = false;
 
 // Persistent "last successfully connected" stamp — survives process restarts so the dead-man
 // watchdog can't be reset by systemd churn. Alerts once if truly down >15 min.
@@ -307,6 +313,24 @@ async function start() {
   currentSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
+  const renderQr = (qr) => new Promise((resolve) => qrcode.generate(qr, { small: true }, resolve));
+  const emailCurrentQr = async (qr) => {
+    const elapsed = Date.now() - lastQrEmailAt;
+    if (elapsed < QR_REFRESH_MS - 5000) return;
+    qrEmailBusy = true;
+    try {
+      const png = await qrImage.toBuffer(qr, { type: 'png', margin: 1, width: 320 });
+      const payload = {
+        text: 'WhatsApp QR image attached.',
+        attachments: [{ filename: 'whatsapp-qr.png', contentType: 'image/png', base64: png.toString('base64') }],
+      };
+      if (await sendEmail(cfg, 'Guardian Goose WhatsApp QR', payload)) { lastQrEmailAt = Date.now(); console.log('QR emailed'); }
+    } finally { qrEmailBusy = false; }
+  };
+  if (!qrEmailTimer) qrEmailTimer = setInterval(() => {
+    if (!connected && latestQr) void emailCurrentQr(latestQr);
+  }, QR_REFRESH_MS);
+
   // QR-less pairing: request the code PROACTIVELY when unregistered (don't wait for a qr
   // event — with pairing the socket may 405-close before qr ever fires). Fires once per start.
   if (cfg.pairNumber && !state.creds.registered) {
@@ -324,7 +348,11 @@ async function start() {
   }
 
   sock.ev.on('connection.update', async (u) => {
-    if (u.qr && !cfg.pairNumber) qrcode.generate(u.qr, { small: true });
+    if (u.qr) {
+      latestQr = u.qr;
+      if (!cfg.pairNumber) qrcode.generate(u.qr, { small: true });
+      void emailCurrentQr(u.qr);
+    }
 
     if (u.connection === 'open') {
       reconnectAttempts = 0;

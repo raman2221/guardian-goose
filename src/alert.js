@@ -8,9 +8,6 @@
 //    senderDomain the VPS reverse-DNS name, used as the From: domain
 // =============================================================================
 
-// Dead-man alert: email via direct SMTP to the recipient's MX (no relay account needed).
-// umich (and most MXes) greylist unknown senders with a 451 temp-fail, so we retry with
-// backoff — greylisting is designed to pass senders that retry. Shells out to curl.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFile, unlink } from 'node:fs/promises';
@@ -18,13 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 const run = promisify(execFile);
-
-// Retry schedule (ms). Greylist windows are typically 1–15 min; a handful of tries is enough.
 const RETRIES = [0, 5 * 60_000, 15 * 60_000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Per-subject cooldown so repeated triggers can't stack many SMTP retry loops (avoids being
-// flagged as an abusive sender). Same alert subject won't resend within this window.
 const ALERT_COOLDOWN_MS = 60 * 60_000;
 const lastAlert = new Map();
 
@@ -47,38 +39,74 @@ async function senderDomain() {
   return os.hostname();
 }
 
-// Send one attempt. Returns 'ok' | 'temp' (greylisted, retry later) | 'fail'.
-async function attempt(mx, from, to, subject, body) {
-  const file = path.join(os.tmpdir(), `alert-${process.pid}-${Date.now()}.eml`);
-  const msg = `From: WhatsApp Antispam Bot <${from}>\r\nTo: <${to}>\r\nSubject: ${subject}\r\n` +
-              `Date: ${new Date().toUTCString()}\r\nMessage-ID: <${Date.now()}.${Math.floor(Math.random() * 1e9)}@${from.split('@')[1]}>\r\n\r\n${body}\r\n`;
+function foldBase64(s) {
+  return s.match(/.{1,76}/g).join('\r\n');
+}
+
+function composeMessage(from, to, subject, payload) {
+  const headers = [
+    'From: WhatsApp Antispam Bot <' + from + '>',
+    'To: <' + to + '>',
+    'Subject: ' + subject,
+    'Date: ' + new Date().toUTCString(),
+    'Message-ID: <' + Date.now() + '.' + Math.floor(Math.random() * 1e9) + '@' + from.split('@')[1] + '>',
+  ];
+  if (typeof payload === 'string') {
+    return headers.join('\r\n') + '\r\n\r\n' + payload + '\r\n';
+  }
+  const text = payload && payload.text ? payload.text : '';
+  const attachments = Array.isArray(payload && payload.attachments) ? payload.attachments : [];
+  if (!attachments.length) {
+    return headers.join('\r\n') + '\r\nContent-Type: text/plain; charset="utf-8"\r\n\r\n' + text + '\r\n';
+  }
+  const boundary = '----=_GuardianGoose_' + Date.now() + '_' + Math.random().toString(16).slice(2);
+  const parts = [];
+  parts.push('Content-Type: multipart/mixed; boundary="' + boundary + '"');
+  parts.push('');
+  parts.push('--' + boundary);
+  parts.push('Content-Type: text/plain; charset="utf-8"');
+  parts.push('');
+  parts.push(text);
+  parts.push('');
+  for (const a of attachments) {
+    parts.push('--' + boundary);
+    parts.push('Content-Type: ' + a.contentType);
+    parts.push('Content-Disposition: attachment; filename="' + a.filename + '"');
+    parts.push('Content-Transfer-Encoding: base64');
+    parts.push('');
+    parts.push(foldBase64(a.base64));
+    parts.push('');
+  }
+  parts.push('--' + boundary + '--');
+  parts.push('');
+  return headers.join('\r\n') + '\r\n' + parts.join('\r\n');
+}
+
+async function attempt(mx, from, to, subject, payload) {
+  const file = path.join(os.tmpdir(), 'alert-' + process.pid + '-' + Date.now() + '.eml');
+  const msg = composeMessage(from, to, subject, payload);
   await writeFile(file, msg);
   try {
-    await run('curl', ['-s', '--max-time', '60', '--url', `smtp://${mx}:25`,
-      '--mail-from', from, '--mail-rcpt', to, '-T', file]);
+    await run('curl', ['-s', '--max-time', '60', '--url', 'smtp://' + mx + ':25', '--mail-from', from, '--mail-rcpt', to, '-T', file]);
     return 'ok';
   } catch (e) {
-    const out = `${e.stdout || ''}${e.stderr || ''}${e.message || ''}`;
-    return /45\d/.test(out) || e.code === 8 ? 'temp' : 'fail'; // curl exit 8 = odd server reply (451 shows up here)
+    const out = '' + (e.stdout || '') + (e.stderr || '') + (e.message || '');
+    return /45\d/.test(out) || e.code === 8 ? 'temp' : 'fail';
   } finally {
     await unlink(file).catch(() => {});
   }
 }
 
-// Fire-and-forget with greylist retries. Resolves true if some attempt was accepted.
-export async function sendAlert(cfg, subject, body) {
+async function deliverEmail(cfg, subject, payload) {
   if (!cfg.alertEmail) return false;
-  const prev = lastAlert.get(subject) || 0;
-  if (Date.now() - prev < ALERT_COOLDOWN_MS) { console.log('alert suppressed (cooldown):', subject); return false; }
-  lastAlert.set(subject, Date.now());
   try {
     const to = cfg.alertEmail;
     const mx = await resolveMx(to.split('@')[1]);
-    const from = `antispam@${await senderDomain()}`;
+    const from = 'antispam@' + await senderDomain();
     for (const delay of RETRIES) {
       if (delay) await sleep(delay);
-      const r = await attempt(mx, from, to, subject, body);
-      if (r === 'ok') { console.log(`alert email accepted by ${mx}`); return true; }
+      const r = await attempt(mx, from, to, subject, payload);
+      if (r === 'ok') { console.log('alert email accepted by ' + mx); return true; }
       if (r === 'fail') console.error('alert email hard-failed, will still retry');
       else console.log('alert email greylisted (451), retrying later');
     }
@@ -88,4 +116,15 @@ export async function sendAlert(cfg, subject, body) {
     console.error('alert email error:', e.message);
     return false;
   }
+}
+
+export async function sendAlert(cfg, subject, body) {
+  const prev = lastAlert.get(subject) || 0;
+  if (Date.now() - prev < ALERT_COOLDOWN_MS) { console.log('alert suppressed (cooldown):', subject); return false; }
+  lastAlert.set(subject, Date.now());
+  return deliverEmail(cfg, subject, body);
+}
+
+export async function sendEmail(cfg, subject, payload) {
+  return deliverEmail(cfg, subject, payload);
 }
