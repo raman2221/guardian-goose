@@ -123,6 +123,16 @@ export function openDb(path) {
       PRIMARY KEY (gid, msg_id)
     );
 
+    -- Persistent "has this member ever posted here" marker. msg_index is pruned after 7 days,
+    -- so it cannot answer "is this their first message" — a quiet member's return post would
+    -- look like a drive-by. One row per (gid, member key), written on their first message.
+    CREATE TABLE IF NOT EXISTS first_post (
+      gid   TEXT,
+      phone TEXT,
+      ts    INTEGER,
+      PRIMARY KEY (gid, phone)
+    );
+
     -- Recent message keys so /remove and auto-delete can revoke messages.
     CREATE TABLE IF NOT EXISTS msg_index (
       gid        TEXT,

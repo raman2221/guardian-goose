@@ -23,6 +23,7 @@ export const recordLid = (db, phone, lid) => {
   db.prepare('INSERT INTO lidmap (phone,lid) VALUES (?,?) ON CONFLICT(phone) DO UPDATE SET lid=excluded.lid').run(phone, lid);
 };
 export const lidForPhone = (db, phone) => db.prepare('SELECT lid FROM lidmap WHERE phone=?').get(phone)?.lid || null;
+export const phoneForLid = (db, lid) => db.prepare('SELECT phone FROM lidmap WHERE lid=?').get(lid)?.phone || null;
 
 // Mark an id (phone or LID) as safe to message (it contacted the bot first). Both are recorded
 // so a member reachable by either identity is recognised.

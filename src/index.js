@@ -20,10 +20,10 @@ import pino from 'pino';
 import cfg from '../config.js';
 import { openDb } from './db.js';
 import { screen, uniqnameAllowedInGroup, tryAutoAdmit } from './screening.js';
-import { inspect } from './behavior.js';
+import { inspect, isStrong, isHardStrong } from './behavior.js';
 import { handleDM, setSession, clearSession, ADMIN_WELCOME } from './commands.js';
-import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, archiveMessage, addrFor, addrForId, jid2phone } from './actions.js';
-import { normalizePhone } from './security.js';
+import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, phoneForLid, recordContact, isContacted, archiveMessage, addrFor, addrForId, jid2phone } from './actions.js';
+import { normalizePhone, MAX_INPUT } from './security.js';
 import { installOutbox } from './outbox.js';
 import { bumpStat, snapshotMembers } from './stats.js';
 
@@ -77,10 +77,13 @@ const now = () => Math.floor(Date.now() / 1000);
 const db = openDb(cfg.dbPath);
 const log = pino({ level: 'warn' });
 
+// Full text for spam inspection (scam posts bury the link past the 400-char command cap).
+// Stored copies (msg_index, archive) are cut to MAX_INPUT.
+const INSPECT_MAX = 4000;
 function textOf(msg) {
   const m = msg.message || {};
   return clean(m.conversation || m.extendedTextMessage?.text ||
-               m.imageMessage?.caption || m.videoMessage?.caption || '');
+               m.imageMessage?.caption || m.videoMessage?.caption || '', INSPECT_MAX);
 }
 const groupPolicy = (gid) => db.prepare('SELECT policy FROM groups WHERE gid=?').get(gid)?.policy || cfg.defaultPolicy;
 // Per-group strict grace window (hours); falls back to the config default when unset.
@@ -454,6 +457,8 @@ async function start() {
       const senderLid = String(senderId).endsWith('@lid') ? jid2phone(senderId) : null;
       if (altPhone && senderLid) recordLid(db, altPhone, senderLid);
       const phone = isGroup ? (senderLid || jid2phone(senderId)) : (altPhone || jid2phone(senderId));
+      // Real phone for the members table (uniqname, VOIP facts are keyed by phone, not LID).
+      const realPhone = altPhone || (senderLid ? phoneForLid(db, senderLid) : null) || phone;
 
       if (!isGroup) {
         await sock.readMessages([msg.key]).catch(() => {}); // send a read receipt, then reply
@@ -469,23 +474,28 @@ async function start() {
       // In-chat admin command: "/ban <number>" typed IN the group.
       if (/^\/ban\b/i.test(body)) { await handleInChatBan(sock, jid, phone, body); continue; }
 
-      const hasMedia = !!(msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage || msg.message.stickerMessage || msg.message.audioMessage);
-      const isFirstMessage = !db.prepare('SELECT 1 FROM msg_index WHERE gid=? AND phone=? LIMIT 1').get(jid, phone);
+      // Stickers and voice notes are never spam vectors here; images, videos (gifs), documents are weak signals.
+      const hasMedia = !!(msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage);
+      // First message EVER in this group (persistent marker; msg_index alone is pruned weekly).
+      const isFirstMessage = !db.prepare('SELECT 1 FROM first_post WHERE gid=? AND phone=?').get(jid, phone)
+        && !db.prepare('SELECT 1 FROM msg_index WHERE gid=? AND phone=? LIMIT 1').get(jid, phone);
+      db.prepare('INSERT OR IGNORE INTO first_post (gid,phone,ts) VALUES (?,?,?)').run(jid, phone, now());
+      const stored = body.slice(0, MAX_INPUT);
 
-      db.prepare(`INSERT OR IGNORE INTO msg_index (gid,phone,msg_id,body,ts) VALUES (?,?,?,?,?)`).run(jid, phone, msg.key.id, body, now());
+      db.prepare(`INSERT OR IGNORE INTO msg_index (gid,phone,msg_id,body,ts) VALUES (?,?,?,?,?)`).run(jid, phone, msg.key.id, stored, now());
       bumpStat(db, jid, 'messages'); // message-volume counter for /stats
 
       // Per-group verification. Known uniqname allowed here -> silent admit.
       let verified = verifiedHere(jid, phone);
       if (!verified) {
-        const known = db.prepare('SELECT uniqname FROM members WHERE phone=?').get(phone)?.uniqname;
+        const known = db.prepare('SELECT uniqname FROM members WHERE phone=? OR phone=?').get(realPhone, phone)?.uniqname;
         if (known && uniqnameAllowedInGroup(db, jid, known)) { markVerified(jid, phone, known); verified = true; }
       }
 
       // Revoke THIS message for everyone (sender addressed by their exact in-group id). Archive
       // it first so any deleted message (spam revoke, hold-mute) stays reviewable via /messages.
       const revoke = async () => {
-        archiveMessage(db, jid, phone, msg.key.id, body, now());
+        archiveMessage(db, jid, phone, msg.key.id, stored, now());
         await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, participant: senderId, fromMe: false } }).catch(() => {});
         db.prepare('DELETE FROM msg_index WHERE gid=? AND msg_id=?').run(jid, msg.key.id);
       };
@@ -500,16 +510,23 @@ async function start() {
       // Spam signals ALWAYS inspected (self-attested verification grants no immunity).
       const signals = inspect(cfg, phone, jid, body, { hasMedia, isFirstMessage });
       if (!signals.length) continue;
-      const member = db.prepare('SELECT is_voip,is_foreign FROM members WHERE phone=?').get(phone);
+      const member = db.prepare('SELECT is_voip,is_foreign FROM members WHERE phone=? OR phone=?').get(realPhone, phone);
       const voip = member?.is_voip === 1;
-      // STRONG = high-confidence spam: drive-by first-message spam, cross-group broadcast,
-      // scam keywords. (link/dm_solicit/media/wall/burst alone -> flag, not auto-delete.)
-      const strong = signals.includes('first_msg_spam') || signals.includes('cross_group') || signals.includes('scam_keyword');
+      // STRONG = high-confidence spam (see behavior.js): drive-by first-message spam, cross-group
+      // broadcast, scam vocabulary, invite link, link+solicitation. Weak signals -> flag only.
+      const strong = isStrong(signals);
 
       if (trusted) {
         if (strong) {
-          logAction(db, { gid: jid, actor: 'bot', action: 'flag', target: phone, reason: `trusted-member: ${signals.join(',')}` });
-          await notifyAdmins(sock, db, jid, 'flag', `⚠️ Trusted member ${phone} showing spam signals (${signals.join(',')}). /remove ${phone} if warranted.`);
+          // Grandfathered-but-never-verified members are a real vector (compromised or bought
+          // accounts already in the group). Hard-strong signals from them are deleted (never
+          // banned); verified members are only ever flagged. cfg.revokePretrusted=false to disable.
+          const pretrustedOnly = !verified && (cfg.revokePretrusted ?? true) && isHardStrong(signals);
+          if (pretrustedOnly) await revoke();
+          logAction(db, { gid: jid, actor: 'bot', action: 'flag', target: phone, reason: `${pretrustedOnly ? 'pretrusted-deleted' : 'trusted-member'}: ${signals.join(',')}` });
+          await notifyAdmins(sock, db, jid, 'flag', pretrustedOnly
+            ? `🪿 Deleted a message from grandfathered (unverified) member ${phone}: ${signals.join(',')}. /messages ${phone} to review, /remove ${phone} if warranted.`
+            : `⚠️ Trusted member ${phone} showing spam signals (${signals.join(',')}). /remove ${phone} if warranted.`);
         }
         continue;
       }
@@ -525,7 +542,7 @@ async function start() {
         // Auto-ban cap reached — queue for admin approval instead of banning automatically.
         db.prepare(`INSERT INTO pending_bans (gid,phone,lastmsg,reason,ts) VALUES (?,?,?,?,?)
                     ON CONFLICT(gid,phone) DO UPDATE SET lastmsg=excluded.lastmsg, reason=excluded.reason, ts=excluded.ts`)
-          .run(jid, phone, body.slice(0, 120), signals.join(','), now());
+          .run(jid, phone, stored.slice(0, 120), signals.join(','), now());
         const pend = db.prepare('SELECT phone,lastmsg FROM pending_bans WHERE gid=? ORDER BY id').all(jid);
         const list = pend.map((p, i) => `${i + 1}. ${p.phone} — "${(p.lastmsg || '').slice(0, 50)}"`).join('\n');
         await notifyAdmins(sock, db, jid, 'flag',

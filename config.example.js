@@ -38,9 +38,19 @@ export default {
     crossGroupWindowMin: 10,       // same text to N groups within window = broadcast spam
     crossGroupThreshold: 3,
     wallOfTextLen: 500,            // message longer than this = 'wall_of_text' signal
-    scamKeywords: ['gofundme', 'invest', 'investment', 'crypto', 'forex',
-                   'guaranteed return', 'double your', 'binary option', 'cash app flip'],
+    // Extra HARD scam words (any hit = delete). Built-in defaults already cover gofund, invest,
+    // crypto, forex, pre-IPO, guaranteed return, double your, binary option, cash app flip, ...
+    // Matched as whole-word prefixes ("invest" hits "investors", not "investigate").
+    scamKeywords: [],
+    // Extra SOLICITATION words (finance / trading / charity appeals). Weak alone; DELETE when
+    // paired with a link. Defaults cover stock(s), trading, profit, earn, income, donate, ...
+    solicitKeywords: [],
   },
+
+  // Grandfathered members (in the group before the bot, never verified) get their message
+  // deleted — never banned — on hard scam signals (scam vocabulary, cross-group broadcast).
+  // Verified members are only ever flagged. false = flag-only for everyone trusted.
+  revokePretrusted: true,
 
   // On joining a NEW group, DM every detected group admin the welcome+command guide.
   // Default false: WhatsApp Communities make community admins appear as admins of every
