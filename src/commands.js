@@ -136,7 +136,7 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
   if (dropped) { sess = null; if (!body.startsWith('/')) return (await send(sock, senderPhone, `${dropped} Send a command to start over, or /help.`), true); }
   if (sess) return stepSession(sock, db, cfg, senderPhone, body, sess, rawText);
   if (!body.startsWith('/')) return false;
-  if (dropped && body.toLowerCase() !== '/help') await send(sock, senderPhone, dropped);
+  if (dropped) await send(sock, senderPhone, dropped);
 
   const tk = tokens(body);
   const cmd = tk[0].toLowerCase();
