@@ -92,6 +92,7 @@ handled separately — if you run several, I'll ask which one(s) each action is 
 /policy               set a group's policy
 /grace <hours>        strict-policy grace window before removal (per group)
 /welcome on|off       post a welcome when someone joins (per group, on by default)
+/roast on|off         after deleting a stock scam, post a goose joke about it (per group, off by default)
 /allow add|remove <uniqname> | list | enforce on|off   per-group approved uniqnames
 /allow bulk           paste a whole roster of uniqnames to auto-approve
 /associate <phone> <uniqname>   bind a uniqname to a number + verify them
@@ -221,6 +222,12 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       if (!v) return (await send(sock, senderPhone, 'Usage: /welcome on|off (post a welcome when someone joins)'), true);
       return startScoped(sock, db, senderPhone, groups, { cmd: 'welcome', value: v });
     }
+    case '/roast': {
+      if (!isAdmin) return notAdmin();
+      const v = oneOf(tk[1], ['on', 'off']);
+      if (!v) return (await send(sock, senderPhone, 'Usage: /roast on|off (goose joke after deleting a stock scam)'), true);
+      return startScoped(sock, db, senderPhone, groups, { cmd: 'roast', value: v });
+    }
     case '/notif':
       return isAdmin ? startScoped(sock, db, senderPhone, groups, { cmd: 'notif' }) : notAdmin();
 
@@ -345,6 +352,7 @@ function scopedVerb(p) {
   if (p.cmd === 'membercount') return `Member count${p.date ? ` on ${p.date}` : ''} for`;
   if (p.cmd === 'grace') return `Set strict grace to ${p.hours}h for`;
   if (p.cmd === 'welcome') return `Turn join welcomes ${p.value} for`;
+  if (p.cmd === 'roast') return `Turn scam roasts ${p.value} for`;
   if (p.cmd === 'associate') return `Associate ${p.target} ↔ ${p.uniqname} (verify) in`;
   if (p.cmd === 'allow') return `Apply /allow ${p.sub}${p.uniqname ? ' ' + p.uniqname : p.value ? ' ' + p.value : ''} to`;
   return `Apply /${p.cmd} to`;
@@ -490,6 +498,11 @@ async function execute(sock, db, phone, p, gids) {
     const on = p.value === 'on' ? 1 : 0;
     for (const gid of ok) { db.prepare('UPDATE groups SET welcome=? WHERE gid=?').run(on, gid); logAction(db, { gid, actor: phone, action: 'setting', target: '', reason: `welcome=${on}` }); }
     return send(sock, phone, `Join welcomes ${p.value} for ${ok.length} group(s).`);
+  }
+  if (p.cmd === 'roast') {
+    const on = p.value === 'on' ? 1 : 0;
+    for (const gid of ok) { db.prepare('UPDATE groups SET roast=? WHERE gid=?').run(on, gid); logAction(db, { gid, actor: phone, action: 'setting', target: '', reason: `roast=${on}` }); }
+    return send(sock, phone, `Scam roasts ${p.value} for ${ok.length} group(s). 🪿`);
   }
   if (p.cmd === 'membercount') {
     const countFor = (g) => p.date ? memberCountAt(db, g, p.date)

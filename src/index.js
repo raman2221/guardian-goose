@@ -27,6 +27,7 @@ import { normalizePhone, MAX_INPUT } from './security.js';
 import { installOutbox } from './outbox.js';
 import { bumpStat, snapshotMembers } from './stats.js';
 import { loadModel, recordShadow, pruneShadow } from './ml.js';
+import { pickRoast, takeRoastSlot, isStockScam } from './roast.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
 const QR_REFRESH_MS = 5 * 60 * 1000; // resend current QR every 5 min while logged out
@@ -122,6 +123,15 @@ function shadowScore(gid, phone, msgId, body, signals, trusted) {
       ruleStrong: isStrong(signals), signals: signals.join(','), trusted, ms: Date.now() - started, body,
     });
   }).catch((e) => console.error('ml shadow:', e.message));
+}
+
+// Opt-in per group (/roast on): after the rules delete a STOCK scam, post one goose joke about the
+// scam, never naming the sender. Runs in the background; the outbox sends it after the deletes.
+async function maybeRoast(sock, gid, body) {
+  if (!db.prepare('SELECT roast FROM groups WHERE gid=?').get(gid)?.roast) return;
+  if (!(await isStockScam(body, ml))) return;
+  if (!takeRoastSlot(gid, cfg.roastCooldownMin ?? 10)) return;
+  await sock.sendMessage(gid, { text: pickRoast(gid) });
 }
 
 async function syncGroup(sock, gid) {
@@ -559,7 +569,10 @@ async function start() {
       }
 
       // Unverified + strong signal: pull the message immediately (needs bot=admin to revoke).
-      if (strong) await revoke();
+      if (strong) {
+        await revoke();
+        maybeRoast(sock, jid, body).catch(() => {}); // opt-in goose joke about the scam, in the background
+      }
 
       if (strong && voip && autoBansLast24hInGroup(db, jid) < AUTO_BAN_CAP) {
         const deleted = await removeMember(sock, db, jid, phone, 'bot', `auto: voip+${signals.join(',')}`, { ban: true });

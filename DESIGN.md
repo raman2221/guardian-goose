@@ -125,6 +125,14 @@ is stored only for disagreements or confident scores, 14-day retention.
   the bundle's `parity.json` (exact tokens, scores within 1e-3) and a committed cleaning fixture.
 - `onnxruntime-node` is an optional dependency; without it (or without the bundle) shadow mode stays off.
 - Promote the model to acting only after the shadow logs show it is right on these groups.
+- Get the bundle with `npm run fetch-model` (downloads from a GitHub release, checks SHA-256).
+
+## Scam roasts (opt-in, per group)
+`/roast on|off` (off by default). After the rules **delete** a message from an untrusted member and it is a
+**stock** scam (model score ≥ cutoff when the model is loaded, else finance vocabulary), the bot posts one
+randomized goose joke about the scam (`src/roast.js`). It never names, tags, or quotes the sender, never repeats
+a line twice in a row in a group, and posts at most once per group per `roastCooldownMin` (default 10) so a
+raid gets one joke, not twenty. The post goes through the paced outbox, after the deletes.
 
 ## Still open (stubs / TODO)
 1. **Twilio / Numverify providers** — `src/providers/index.js` has interface + URL comments; add

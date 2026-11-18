@@ -97,6 +97,11 @@ export default {
   // exported bundle folder (model.onnx, vocab.txt, goose.json). Review: node scripts/ml-report.js
   ml: { enabled: false, bundleDir: './models/whatsapp-minilm-onnx' },
 
+  // Scam roasts are per group and off by default (admins: /roast on). After the rules delete a
+  // stock scam, the bot posts one randomized goose joke about the scam (never the sender).
+  // At most one roast per group per this many minutes, so a raid doesn't make the bot chatty.
+  roastCooldownMin: 10,
+
   dbPath: './antispam.db',
   authDir: './auth_state',
 };
