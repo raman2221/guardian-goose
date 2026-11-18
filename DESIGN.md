@@ -125,7 +125,10 @@ is stored only for disagreements or confident scores, 14-day retention.
   the bundle's `parity.json` (exact tokens, scores within 1e-3) and a committed cleaning fixture.
 - `onnxruntime-node` is an optional dependency; without it (or without the bundle) shadow mode stays off.
 - Promote the model to acting only after the shadow logs show it is right on these groups.
-- Get the bundle with `npm run fetch-model` (downloads from a GitHub release, checks SHA-256).
+- Get the bundle onto the server either way:
+  - `npm run fetch-model`: downloads the four files from this repo's `model-v2` release and checks SHA-256.
+  - or copy the folder by hand (`scp -r whatsapp-minilm-onnx server:<bot>/models/`) and run
+    `npm run fetch-model` to verify it (correct files are skipped, nothing is downloaded).
 
 ## Scam roasts (opt-in, per group)
 `/roast on|off` (off by default). After the rules **delete** a message from an untrusted member and it is a

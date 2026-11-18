@@ -1,14 +1,15 @@
 // Download the spam-model bundle for shadow mode (src/ml.js) and scam roasts into
-// ./models/whatsapp-minilm-onnx. The files are attached to a GitHub release; each one's SHA-256
-// is checked, so a corrupted or swapped file is never used. Files already present and correct
-// are skipped.
+// ./models/whatsapp-minilm-onnx. The files are attached to the repo's `model-v2` GitHub release;
+// each one's SHA-256 is checked, so a corrupted or swapped file is never used. Files already
+// present and correct are skipped, so copying the folder in by hand works too (this script then
+// just verifies it).
 //   node scripts/fetch-model.js          (or: npm run fetch-model)
 // MODEL_BASE_URL overrides the download location, MODEL_DIR the target folder.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const BASE = process.env.MODEL_BASE_URL || 'https://github.com/raman2221/guardian-goose/releases/download/model-v2';
+const BASE = process.env.MODEL_BASE_URL || 'https://github.com/alpaslan-exe/guardian-goose/releases/download/model-v2';
 const DIR = process.env.MODEL_DIR || './models/whatsapp-minilm-onnx';
 const FILES = {
   'model.onnx': 'bed93f1a1ce176772b891c4718c65c54539de75555490e2aa0060368b2af8cc7',
