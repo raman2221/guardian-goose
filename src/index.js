@@ -26,6 +26,7 @@ import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup
 import { normalizePhone, MAX_INPUT } from './security.js';
 import { installOutbox } from './outbox.js';
 import { bumpStat, snapshotMembers } from './stats.js';
+import { loadModel, recordShadow, pruneShadow } from './ml.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
 const QR_REFRESH_MS = 5 * 60 * 1000; // resend current QR every 5 min while logged out
@@ -101,6 +102,27 @@ const markVerified = (gid, phone, uq) =>
 // Admin DMs from the group-message path are queued without waiting for them: each one is paced by
 // the outbox (seconds apart), and awaiting them held up the next message's moderation.
 const notifyLater = (gid, kind, text) => { notifyAdmins(currentSock, db, gid, kind, text).catch(() => {}); };
+
+// Spam model in SHADOW MODE (cfg.ml.enabled): score each group message and record the score next
+// to what the rules saw. It never deletes, kicks, or flags, and scoring runs in the background so
+// it can't delay moderation. A missing bundle or onnxruntime-node just leaves it off.
+let ml = null;
+if (cfg.ml?.enabled) {
+  loadModel(cfg.ml.bundleDir || './models/whatsapp-minilm-onnx')
+    .then((m) => { ml = m; console.log(`ml shadow mode on: model ${m.version}, cutoff ${m.cutoff}`); })
+    .catch((e) => console.error('ml shadow mode off:', e.message));
+}
+function shadowScore(gid, phone, msgId, body, signals, trusted) {
+  if (!ml || !body) return;
+  const started = Date.now();
+  ml.score(body).then((score) => {
+    if (score == null) return; // backlog full: this message goes unscored
+    recordShadow(db, {
+      gid, phone, msgId, ts: now(), score, model: ml.version, modelSpam: score >= ml.cutoff,
+      ruleStrong: isStrong(signals), signals: signals.join(','), trusted, ms: Date.now() - started, body,
+    });
+  }).catch((e) => console.error('ml shadow:', e.message));
+}
 
 async function syncGroup(sock, gid) {
   const meta = await sock.groupMetadata(gid).catch(() => null);
@@ -373,6 +395,7 @@ async function start() {
       if (!sweepTimer) sweepTimer = setInterval(() => {
         graceSweep(currentSock).catch(() => {});
         try { pruneArchive(db); } catch {}
+        try { pruneShadow(db); } catch {}
         try { db.prepare('DELETE FROM msg_index WHERE ts<?').run(now() - 7 * 86400); } catch {} // 7-day index retention
         try { db.prepare('DELETE FROM pending_bans WHERE ts<?').run(now() - 2 * 86400); } catch {} // 48h pending expiry
       }, 15 * 60 * 1000);
@@ -512,6 +535,7 @@ async function start() {
 
       // Spam signals ALWAYS inspected (self-attested verification grants no immunity).
       const signals = inspect(cfg, phone, jid, body, { hasMedia, isFirstMessage });
+      shadowScore(jid, phone, msg.key.id, body, signals, trusted); // shadow mode: record only, never acts
       if (!signals.length) continue;
       const member = db.prepare('SELECT is_voip,is_foreign FROM members WHERE phone=? OR phone=?').get(realPhone, phone);
       const voip = member?.is_voip === 1;

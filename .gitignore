@@ -8,3 +8,4 @@ join_queue
 dm_probe
 .last_connected
 *.log
+models/

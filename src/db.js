@@ -161,6 +161,25 @@ export function openDb(path) {
       PRIMARY KEY (gid, day)
     );
 
+    -- Shadow-mode spam-model scores (cfg.ml). NEVER used for moderation: compared offline with
+    -- what the rules did (scripts/ml-report.js). body kept only when model and rules disagree or
+    -- the model is confident. 14-day retention (pruneShadow).
+    CREATE TABLE IF NOT EXISTS ml_shadow (
+      gid         TEXT,
+      phone       TEXT,
+      msg_id      TEXT,
+      ts          INTEGER,
+      score       REAL,                  -- model's spam probability
+      model       TEXT,                  -- model version that produced the score
+      model_spam  INTEGER,               -- 1 = score >= the model's cutoff
+      rule_strong INTEGER,               -- 1 = the rules found a STRONG signal
+      signals     TEXT,                  -- rule signals, comma-separated
+      trusted     INTEGER,               -- sender verified or grandfathered in this group
+      ms          INTEGER,               -- scoring time
+      body        TEXT,
+      PRIMARY KEY (gid, msg_id)
+    );
+
     CREATE TABLE IF NOT EXISTS action_log (
       id     INTEGER PRIMARY KEY AUTOINCREMENT,
       ts     INTEGER,

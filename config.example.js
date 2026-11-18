@@ -91,6 +91,12 @@ export default {
   sendJitterMs: 8000,   // extra random 0..N ms added to each gap (human-like)
   sendDailyCap: 300,    // hard ceiling on sends per rolling 24h (backstop against runaway)
 
+  // Spam model in SHADOW MODE (optional). Scores every group message with the model trained in
+  // goose-spam-model and records it (table ml_shadow) next to what the rules did. It NEVER
+  // deletes, kicks, or flags on the score. Needs onnxruntime-node (an optional dependency) and the
+  // exported bundle folder (model.onnx, vocab.txt, goose.json). Review: node scripts/ml-report.js
+  ml: { enabled: false, bundleDir: './models/whatsapp-minilm-onnx' },
+
   dbPath: './antispam.db',
   authDir: './auth_state',
 };

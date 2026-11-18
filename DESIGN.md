@@ -107,6 +107,25 @@ actions it takes, respecting each admin's level.
 `msg_archive(gid,phone,...)` (banned users, 45/30d) · `msg_index` (recent keys for deletion) ·
 `dm_session` (wizard state) · `action_log`.
 
+## Send priority (speed)
+Every outbound send is paced by `outbox.js` (`sendMinGapMs` + jitter). To keep deletion fast without
+sending more: **deletes jump ahead of queued ordinary messages** (replies, admin DMs, welcomes), keeping
+their own order; `removeMember` **kicks first** and lets the old-message deletes drain afterwards; the
+group-message handler **queues admin notifications without awaiting them**. Total sends, pacing, and
+the daily cap are unchanged.
+
+## Spam model (shadow mode, optional)
+`src/ml.js` runs a small transformer (MiniLM, ~5 ms per message on one CPU thread) trained in the
+separate goose-spam-model project on WhatsApp stock-group scams. With `ml.enabled` in `config.js` and
+the exported bundle in `ml.bundleDir`, every group message is scored **in the background** and
+recorded in `ml_shadow` next to the rule signals. **The score never deletes, kicks, or flags.**
+`node scripts/ml-report.js [days]` shows where the model and the rules agree and disagree; message text
+is stored only for disagreements or confident scores, 14-day retention.
+- `normalize` and the tokenizer are hand ports of the Python training code; `test/ml.test.js` replays
+  the bundle's `parity.json` (exact tokens, scores within 1e-3) and a committed cleaning fixture.
+- `onnxruntime-node` is an optional dependency; without it (or without the bundle) shadow mode stays off.
+- Promote the model to acting only after the shadow logs show it is right on these groups.
+
 ## Still open (stubs / TODO)
 1. **Twilio / Numverify providers** — `src/providers/index.js` has interface + URL comments; add
    `fetch` + creds to upgrade VOIP accuracy.
