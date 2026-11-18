@@ -98,6 +98,9 @@ const trustedHere = (gid, phone) => !!db.prepare('SELECT 1 FROM membership WHERE
 const markVerified = (gid, phone, uq) =>
   db.prepare(`INSERT INTO membership (gid,phone,joined_ts,verified,uniqname) VALUES (?,?,?,1,?)
               ON CONFLICT(gid,phone) DO UPDATE SET verified=1, uniqname=excluded.uniqname`).run(gid, phone, now(), uq);
+// Admin DMs from the group-message path are queued without waiting for them: each one is paced by
+// the outbox (seconds apart), and awaiting them held up the next message's moderation.
+const notifyLater = (gid, kind, text) => { notifyAdmins(currentSock, db, gid, kind, text).catch(() => {}); };
 
 async function syncGroup(sock, gid) {
   const meta = await sock.groupMetadata(gid).catch(() => null);
@@ -524,7 +527,7 @@ async function start() {
           const pretrustedOnly = !verified && (cfg.revokePretrusted ?? true) && isHardStrong(signals);
           if (pretrustedOnly) await revoke();
           logAction(db, { gid: jid, actor: 'bot', action: 'flag', target: phone, reason: `${pretrustedOnly ? 'pretrusted-deleted' : 'trusted-member'}: ${signals.join(',')}` });
-          await notifyAdmins(sock, db, jid, 'flag', pretrustedOnly
+          notifyLater(jid, 'flag', pretrustedOnly
             ? `🪿 Deleted a message from grandfathered (unverified) member ${phone}: ${signals.join(',')}. /messages ${phone} to review, /remove ${phone} if warranted.`
             : `⚠️ Trusted member ${phone} showing spam signals (${signals.join(',')}). /remove ${phone} if warranted.`);
         }
@@ -537,7 +540,7 @@ async function start() {
       if (strong && voip && autoBansLast24hInGroup(db, jid) < AUTO_BAN_CAP) {
         const deleted = await removeMember(sock, db, jid, phone, 'bot', `auto: voip+${signals.join(',')}`, { ban: true });
         if (deleted === -1) continue; // protected target — refused
-        await notifyAdmins(sock, db, jid, 'remove', `🪿 Honk! auto-BANNED ${phone} — VOIP + ${signals.join(',')}; archived+deleted ${deleted} msg(s)`);
+        notifyLater(jid, 'remove', `🪿 Honk! auto-BANNED ${phone} — VOIP + ${signals.join(',')}; archived+deleted ${deleted} msg(s)`);
       } else if (strong && voip) {
         // Auto-ban cap reached — queue for admin approval instead of banning automatically.
         db.prepare(`INSERT INTO pending_bans (gid,phone,lastmsg,reason,ts) VALUES (?,?,?,?,?)
@@ -545,11 +548,11 @@ async function start() {
           .run(jid, phone, stored.slice(0, 120), signals.join(','), now());
         const pend = db.prepare('SELECT phone,lastmsg FROM pending_bans WHERE gid=? ORDER BY id').all(jid);
         const list = pend.map((p, i) => `${i + 1}. ${p.phone} — "${(p.lastmsg || '').slice(0, 50)}"`).join('\n');
-        await notifyAdmins(sock, db, jid, 'flag',
+        notifyLater(jid, 'flag',
           `🛑 Auto-ban cap (${AUTO_BAN_CAP}/24h) reached. ${phone} needs your OK.\nPending bans:\n${list}\nReply */confirmban 1 2* to ban those (by number).`);
       } else if (strong || signals.includes('link') || signals.includes('dm_solicit')) {
         logAction(db, { gid: jid, actor: 'bot', action: 'flag', target: phone, reason: signals.join(',') });
-        await notifyAdmins(sock, db, jid, 'flag',
+        notifyLater(jid, 'flag',
           `⚠️ ${phone} flagged (${signals.join(',')}). voip=${member?.is_voip ?? '?'} foreign=${member?.is_foreign ? 'yes' : 'no'}. /remove ${phone}`);
       }
     }

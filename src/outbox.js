@@ -9,7 +9,8 @@
 //    minGapMs   minimum delay enforced after each send
 //    jitterMs   extra random 0..jitterMs added to each gap (avoids a fixed cadence)
 //    dailyCap   max sends per rolling 24h; excess sends are rejected, not queued
-//    queue      pending { jid, content, options, resolve, reject } jobs
+//    queue      pending { jid, content, options, resolve, reject } jobs; deletes are
+//               placed ahead of ordinary messages
 // =============================================================================
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,9 +49,18 @@ export function installOutbox(sock, { minGapMs = 2500, jitterMs = 2500, dailyCap
     running = false;
   }
 
-  // Enqueue a send; resolves with the send result once its turn comes up.
+  // Enqueue a send; resolves with the send result once its turn comes up. Deletes jump ahead of
+  // ordinary messages (keeping their own order), so a scam disappears before the bot DMs admins
+  // about it. This only reorders the queue: pacing, the daily cap, and total sends are unchanged.
+  const isDelete = (content) => !!(content && content.delete);
   sock.sendMessage = (jid, content, options) => new Promise((resolve, reject) => {
-    queue.push({ jid, content, options, resolve, reject });
+    const job = { jid, content, options, resolve, reject };
+    if (isDelete(content)) {
+      const firstMessage = queue.findIndex((queued) => !isDelete(queued.content));
+      queue.splice(firstMessage === -1 ? queue.length : firstMessage, 0, job);
+    } else {
+      queue.push(job);
+    }
     pump();
   });
   return sock;

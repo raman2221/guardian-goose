@@ -127,8 +127,12 @@ export async function removeMember(sock, db, gid, phone, actor, reason, opts = {
     return -1;
   }
   if (opts.ban) archiveUserMessages(db, gid, phone); // archive BEFORE deleteMessages clears msg_index
-  const deleted = await deleteMessages(sock, db, gid, phone, opts.since || 0);
+  // Start the deletes, but kick right away instead of after them: deletes go through the paced
+  // outbox (seconds apart each), the kick does not, so waiting left the spammer in the group,
+  // still able to post, until every old message had been revoked.
+  const deleting = deleteMessages(sock, db, gid, phone, opts.since || 0);
   await sock.groupParticipantsUpdate(gid, [phone2jid(phone)], 'remove').catch(() => {});
+  const deleted = await deleting;
   db.prepare('DELETE FROM membership WHERE gid=? AND phone=?').run(gid, phone);
   if (opts.ban) db.prepare(`INSERT INTO bans (gid,phone,by,ts) VALUES (?,?,?,?)
                             ON CONFLICT(gid,phone) DO NOTHING`).run(gid, phone, actor, now());
